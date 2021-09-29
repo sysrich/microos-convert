@@ -1,0 +1,162 @@
+#!/bin/bash
+#
+# microos-convert - migrate openSUSE systems to openSUSE MicroOS
+#
+# Author: Richard Brown <rbrown@suse.com>
+# Copyright (C) 2021 SUSE Software Solutions GmbH
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 2 of the License, or
+# (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+FSTYPE=""
+NUMVARSUBVOLS=0
+DETECTED_OS=""
+ROOTDEV=""
+MAKEBOOTWRITABLE=0
+LOGFILE="/var/log/microos-convert.log"
+TMPFILE=""
+TMPDIR=${TMPDIR:-/tmp}
+ROOTSIZE=0
+VARSIZE=0
+
+# Log stderr to log file
+exec 2> >(exec tee -a "${LOGFILE}")
+
+usage() {
+    echo "Syntax: microos-convert"
+    echo "--help, -h                 Display this help and exit"
+    echo "evaluate                   Evaluate whether system is viable for a MicroOS conversion"
+    echo "convert                    Convert system to MicroOS"
+    exit $1
+}
+
+explain() {
+    echo
+    echo "openSUSE MicroOS is an immutable rolling-release OS designed for predictable, scalable and reliable operation."
+    echo
+    echo "All operating system updates are delivered automatically and atomically."
+    echo "Compared to regular openSUSE it is designed for narrower use cases, providing a more focused 'out-of-the-box' experience."
+    echo "MicroOS expects users will NOT heavily customise the packages/patterns installed on the system."
+    echo
+    echo "As a server, MicroOS expects either:"
+    echo "  * All user-configured workloads/services to be run in containers."
+    echo "  * No more than 1 or 2 user-configured workloads/services installed via RPMs."
+    echo
+    echo "As a desktop, MicroOS expects users to only install applications using flatpaks via the 'GNOME Software' tool."
+    echo
+    echo "This conversion WILL be disruptive and WILL remove packages/patterns you MIGHT be using."
+    echo
+    echo "If this does not sound appealing to you, we recommend you use openSUSE Tumbleweed"
+    echo
+    while true; do
+      read -p "Would you like to convert your existing system to openSUSE MicroOS? " yn
+      case $yn in
+          [Yy]* )
+            break
+          ;;
+          [Nn]* )
+            exit 0
+          ;;
+          * ) echo "Please answer yes or no.";;
+      esac
+    done
+}
+
+evaluate() {
+    # OS Detection
+    [ -r /etc/os-release ] && . /etc/os-release
+    case "$ID" in
+      opensuse-tumbleweed)
+        echo "[PASS] openSUSE Tumbleweed detected"
+        DETECTED_OS="$ID"
+      ;;
+      *)
+        echo "[FAIL] Unsupported distribution detected"
+        exit 1
+      ;;
+    esac
+    
+    # Filesystem detection
+    FSTYPE=$(findmnt -o FSTYPE -l --target / | grep -v FSTYPE)
+    if [ "$FSTYPE" = "btrfs" ]; then
+      echo "[PASS] / is btrfs"
+    else
+      echo "[FAIL] Unsupported filesystem detected - / must be btrfs"
+      exit 1
+    fi
+
+    # Size detection
+    ROOTSIZE=$(btrfs fi usage /|grep size | awk '{ print $3 }' | grep -Eo '[+-]?[0-9]+([.][0-9]+)?')
+    VARSIZE=$(btrfs fi usage /var|grep size | awk '{ print $3 }' | grep -Eo '[+-]?[0-9]+([.][0-9]+)?')
+    if [ $( printf "%.0f\n" "$ROOTSIZE" ) -ge 5 ]; then
+      echo "[PASS] / is 5GB or larger"
+    else
+      echo "[FAIL] / is smaller than 5GB"
+      exit 1
+    fi
+    if [ $( printf "%.0f\n" "$VARSIZE" ) -ge 5 ]; then
+      echo "[PASS] /var is 5GB or larger"
+    else
+      echo "[FAIL] /var is smaller than 5GB"
+      exit 1
+    fi
+
+    # Subvolume detection
+    if ( btrfs subvolume list / | grep -q '/boot/writable' ); then
+      echo "[PASS] /boot/writable subvolume is present"
+    else
+      echo "[WARN] /boot/writable subvolume is not present, this can be automatically corrected"
+      MAKEBOOTWRITABLE=1
+    fi
+
+#    # /var detection
+#    if ( findmnt -o TARGET /var | grep -q '/var' ); then
+#      echo "[PASS] /var is a seperate partition or subvolume"
+#    else
+#      echo "[FAIL] /var is not a seperate partition or subvolume"
+#      exit 1
+#    fi
+    
+    echo
+    echo "System is suitable for conversion to MicroOS"
+}
+
+convert() {
+    echo test
+}
+
+while [ 1 ]; do
+    if [ $# -eq 0 ]; then
+      break
+    fi
+
+    case "$1" in
+      -h|--help)
+        usage 0
+      ;;
+      evaluate)
+        evaluate
+        exit 0
+      ;;
+      convert)
+        evaluate
+        explain
+        convert
+      ;;
+      *)
+        if [ $# -ge 1 ]; then
+          usage 1;
+        fi
+      ;;
+    esac
+done
